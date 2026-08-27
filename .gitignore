@@ -44,3 +44,5 @@ third_party/stegexpose/*.jar
 
 # SQLite (local dev DB)
 *.db
+
+desktop.ini
