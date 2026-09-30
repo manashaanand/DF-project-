@@ -158,5 +158,41 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
     ]
 
+    # ========================================================
+    # TEMPORARY / RECOVERED FILES
+    # ========================================================
+
+    @property
+    def temp_dir(self) -> Path:
+
+        path = self.repo_root / "data" / "temp"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def recovered_dir(self) -> Path:
+
+        path = self.repo_root / "data" / "recovered"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # ========================================================
+    # AUDIO SETTINGS
+    # ========================================================
+
+    audio_extensions: set[str] = {
+        ".wav", ".mp3", ".flac", ".ogg",
+    }
+
+    # ========================================================
+    # VIDEO SETTINGS
+    # ========================================================
+
+    video_extensions: set[str] = {
+        ".mp4", ".avi", ".mov", ".mkv",
+    }
+
+    video_sample_frames: int = 10
+
 
 settings = Settings()

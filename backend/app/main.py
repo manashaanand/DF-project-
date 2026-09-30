@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 import tempfile
 
@@ -26,7 +27,20 @@ from app.core.logging import (
 )
 
 from app.db.database import init_db
-from app.db.schemas import HealthResponse
+from app.db.schemas import (
+    HealthResponse,
+    MultimediaAnalysisResponse,
+    FileInfoResponse,
+    DetectorInfo,
+    PayloadResponse,
+)
+
+from app.utils.file_utils import (
+    classify_media_type,
+    compute_sha256,
+    detect_mime_type,
+    ALL_SUPPORTED_EXTENSIONS,
+)
 
 from ml.inference.image_predictor import (
     ImagePredictor,
@@ -438,3 +452,138 @@ async def analyze_image(
                     temp_path,
                     cleanup_exc,
                 )
+
+# ============================================================
+# UNIFIED MULTIMEDIA ANALYSIS
+# ============================================================
+
+@app.post(
+    "/multimedia/analyze",
+    response_model=MultimediaAnalysisResponse,
+    tags=["analysis"],
+)
+async def analyze_multimedia(
+    file: UploadFile = File(...),
+):
+    """
+    Unified endpoint for image, audio, and video steganalysis.
+    """
+
+    if not file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="No filename provided",
+        )
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALL_SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported format. Supported extensions: {', '.join(ALL_SUPPORTED_EXTENSIONS)}",
+        )
+
+    media_type = classify_media_type(file.filename)
+    if not media_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to classify media type.",
+        )
+
+    temp_path: Path | None = None
+    try:
+        file_bytes = await file.read()
+        if len(file_bytes) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded file is empty",
+            )
+
+        if len(file_bytes) > settings.max_upload_size_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum size of {settings.max_upload_size_mb} MB",
+            )
+
+        # Write to temp directory safely
+        temp_path = settings.temp_dir / f"temp_{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
+        with open(temp_path, "wb") as f:
+            f.write(file_bytes)
+
+        # File forensics
+        sha256_hash = compute_sha256(temp_path)
+        mime_type = detect_mime_type(temp_path)
+
+        file_info = FileInfoResponse(
+            filename=file.filename,
+            extension=ext,
+            mime_type=mime_type,
+            media_type=media_type,
+            file_size=len(file_bytes),
+            sha256=sha256_hash,
+        )
+
+        if media_type == "image":
+            detector = get_image_detector()
+            if not detector.model_available:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Production 294-feature Logistic Regression model is not available",
+                )
+            
+            result = detector.analyze(temp_path)
+
+            detectors = [
+                DetectorInfo(
+                    name=result.model_version or "LogisticRegression",
+                    score=result.classical_score,
+                    weight=settings.classical_weight,
+                )
+            ]
+            if result.supplementary_available:
+                detectors.append(
+                    DetectorInfo(
+                        name="StegExpose",
+                        score=result.supplementary_score,
+                        weight=settings.stegexpose_weight,
+                    )
+                )
+
+            # Map the response
+            return MultimediaAnalysisResponse(
+                file=file_info,
+                media_type="image",
+                status="STEGO_DETECTED" if result.label == "stego" else "CLEAN" if result.label == "cover" else "INCONCLUSIVE",
+                steganography_detected=(result.label == "stego"),
+                confidence=result.confidence,
+                label=result.label,
+                detectors=detectors,
+                techniques=[], 
+                payload=PayloadResponse(), 
+                forensic_findings=[], 
+                feature_count=result.feature_count,
+                model_version=result.model_version,
+                warnings=result.warnings,
+                analysis_timestamp=datetime.utcnow().isoformat() + "Z"
+            )
+        
+        else:
+            # Phase 1 only supports images; returning 501 for others until Phase 4/5
+            raise HTTPException(
+                status_code=501,
+                detail=f"Analysis for {media_type} is not yet implemented (coming in subsequent phases).",
+            )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Analysis failed: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Analysis failed: {exc}",
+        )
+    finally:
+        if temp_path is not None and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception as cleanup_exc:
+                logger.warning("Could not delete temporary file %s: %s", temp_path, cleanup_exc)

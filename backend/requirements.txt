@@ -1,15 +1,37 @@
+# ============================================================
+# CORE DEPENDENCIES (production pipeline)
+# ============================================================
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.9
 sqlalchemy>=2.0.0
 pydantic-settings>=2.2.0
 opencv-python-headless>=4.9.0
-tensorflow>=2.15.0
 numpy>=1.26.0
-librosa>=0.10.0
-soundfile>=0.12.0
-reportlab>=4.1.0
-pytest>=8.0.0
-httpx>=0.27.0
 scikit-learn>=1.4.0
 Pillow>=10.0.0
+
+# ============================================================
+# AUDIO / VIDEO ANALYSIS
+# ============================================================
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# ============================================================
+# REPORT GENERATION
+# ============================================================
+reportlab>=4.1.0
+
+# ============================================================
+# TESTING
+# ============================================================
+pytest>=8.0.0
+httpx>=0.27.0
+
+# ============================================================
+# OPTIONAL — CNN training/experimentation only
+# The production 294-feature Logistic Regression pipeline
+# does NOT require TensorFlow.
+# Install manually:  pip install tensorflow>=2.15.0
+# ============================================================
+# tensorflow>=2.15.0

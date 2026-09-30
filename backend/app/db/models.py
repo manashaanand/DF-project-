@@ -41,7 +41,7 @@ class AnalysisDetail(Base):
         ForeignKey("analyses.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    cnn_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    classical_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     stegexpose_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     features_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     frame_summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
