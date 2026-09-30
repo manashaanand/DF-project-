@@ -33,6 +33,8 @@ from app.db.schemas import (
     FileInfoResponse,
     DetectorInfo,
     PayloadResponse,
+    TechniqueResponse,
+    ForensicFindingResponse,
 )
 
 from app.utils.file_utils import (
@@ -557,9 +559,22 @@ async def analyze_multimedia(
                 confidence=result.confidence,
                 label=result.label,
                 detectors=detectors,
-                techniques=[], 
+                techniques=[
+                    TechniqueResponse(
+                        technique=t.technique,
+                        confidence=t.confidence,
+                        evidence=t.evidence
+                    ) for t in result.techniques
+                ], 
                 payload=PayloadResponse(), 
-                forensic_findings=[], 
+                forensic_findings=[
+                    ForensicFindingResponse(
+                        category=f.category,
+                        description=f.description,
+                        severity=f.severity,
+                        evidence=f.evidence
+                    ) for f in result.forensic_findings
+                ], 
                 feature_count=result.feature_count,
                 model_version=result.model_version,
                 warnings=result.warnings,

@@ -60,6 +60,14 @@ from ml.inference.image_predictor import (
     ImagePredictor,
 )
 
+from app.forensic.image_forensics import (
+    perform_image_forensics,
+)
+
+from app.forensic.technique_identifier import (
+    identify_techniques,
+)
+
 
 logger = get_logger(__name__)
 
@@ -271,31 +279,34 @@ class ImageDetector(Detector):
         )
 
         # -----------------------------------------------------
+        # FORENSICS & TECHNIQUE IDENTIFICATION
+        # -----------------------------------------------------
+
+        forensic_findings = perform_image_forensics(path)
+        
+        techniques = identify_techniques(
+            findings=forensic_findings,
+            classical_score=classical_score
+        )
+
+        # -----------------------------------------------------
         # RESULT
         # -----------------------------------------------------
 
         return DetectionResult(
             label=label,
-
             confidence=confidence,
-
             classical_score=classical_score,
-
             supplementary_score=(
                 supplementary_score
                 if supplementary_available
                 else None
             ),
-
-            supplementary_available=(
-                supplementary_available
-            ),
-
+            supplementary_available=supplementary_available,
             features=features,
-
             model_loaded=True,
-
             warnings=warnings,
-
             model_version=model_version,
+            forensic_findings=forensic_findings,
+            techniques=techniques,
         )
