@@ -27,6 +27,7 @@ from app.core.logging import (
 )
 
 from app.db.database import init_db
+
 from app.db.schemas import (
     HealthResponse,
     MultimediaAnalysisResponse,
@@ -413,6 +414,58 @@ async def analyze_image(
 
             "model_version": result.model_version,
 
+            "detection_status": (
+                result.detection_status
+            ),
+
+            "forensic_findings": [
+                {
+                    "category": finding.category,
+                    "description": finding.description,
+                    "severity": finding.severity,
+                    "evidence": finding.evidence,
+                }
+                for finding in result.forensic_findings
+            ],
+
+            "techniques": [
+                {
+                    "technique": technique.technique,
+                    "confidence": technique.confidence,
+                    "evidence": technique.evidence,
+                }
+                for technique in result.techniques
+            ],
+
+            "extraction": (
+                {
+                    "status": (
+                        result.extraction.status
+                    ),
+                    "payload_type": (
+                        result.extraction.payload_type
+                    ),
+                    "payload_size": (
+                        result.extraction.payload_size
+                    ),
+                    "sha256": (
+                        result.extraction.sha256
+                    ),
+                    "download_id": (
+                        result.extraction.download_id
+                    ),
+                    "message": (
+                        result.extraction.message
+                    ),
+                }
+                if result.extraction
+                else None
+            ),
+
+            "feature_count": (
+                result.feature_count
+            ),
+
             "warnings": result.warnings,
         }
 
@@ -455,6 +508,7 @@ async def analyze_image(
                     cleanup_exc,
                 )
 
+
 # ============================================================
 # UNIFIED MULTIMEDIA ANALYSIS
 # ============================================================
@@ -468,52 +522,150 @@ async def analyze_multimedia(
     file: UploadFile = File(...),
 ):
     """
-    Unified endpoint for image, audio, and video steganalysis.
+    Unified endpoint for image, audio,
+    and video steganalysis.
+
+    Images currently support:
+    - Production ML detection
+    - Forensic analysis
+    - Technique identification
+    - Supported appended payload extraction
+
+    Audio and video remain unavailable
+    until their real detectors are implemented.
     """
 
+    # --------------------------------------------------------
+    # FILENAME
+    # --------------------------------------------------------
+
     if not file.filename:
+
         raise HTTPException(
             status_code=400,
             detail="No filename provided",
         )
 
-    ext = Path(file.filename).suffix.lower()
+    # --------------------------------------------------------
+    # EXTENSION
+    # --------------------------------------------------------
+
+    ext = Path(
+        file.filename
+    ).suffix.lower()
+
     if ext not in ALL_SUPPORTED_EXTENSIONS:
+
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported format. Supported extensions: {', '.join(ALL_SUPPORTED_EXTENSIONS)}",
+
+            detail=(
+                "Unsupported format. "
+                "Supported extensions: "
+                f"{', '.join(ALL_SUPPORTED_EXTENSIONS)}"
+            ),
         )
 
-    media_type = classify_media_type(file.filename)
+    # --------------------------------------------------------
+    # MEDIA TYPE
+    # --------------------------------------------------------
+
+    media_type = classify_media_type(
+        file.filename
+    )
+
     if not media_type:
+
         raise HTTPException(
             status_code=400,
             detail="Unable to classify media type.",
         )
 
     temp_path: Path | None = None
+
     try:
+
+        # ----------------------------------------------------
+        # READ FILE
+        # ----------------------------------------------------
+
         file_bytes = await file.read()
+
         if len(file_bytes) == 0:
+
             raise HTTPException(
                 status_code=400,
                 detail="Uploaded file is empty",
             )
 
-        if len(file_bytes) > settings.max_upload_size_bytes:
+        # ----------------------------------------------------
+        # SIZE
+        # ----------------------------------------------------
+
+        if (
+            len(file_bytes)
+            > settings.max_upload_size_bytes
+        ):
+
             raise HTTPException(
                 status_code=413,
-                detail=f"File exceeds maximum size of {settings.max_upload_size_mb} MB",
+
+                detail=(
+                    f"File exceeds maximum size of "
+                    f"{settings.max_upload_size_mb} MB"
+                ),
             )
 
-        # Write to temp directory safely
-        temp_path = settings.temp_dir / f"temp_{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
-        with open(temp_path, "wb") as f:
-            f.write(file_bytes)
+        # ----------------------------------------------------
+        # TEMP DIRECTORY
+        # ----------------------------------------------------
 
-        # File forensics
-        sha256_hash = compute_sha256(temp_path)
-        mime_type = detect_mime_type(temp_path)
+        settings.temp_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        # Prevent directory traversal.
+        safe_filename = Path(
+            file.filename
+        ).name
+
+        temp_path = (
+            settings.temp_dir
+            / (
+                "temp_"
+                + datetime.now().strftime(
+                    "%Y%m%d%H%M%S%f"
+                )
+                + "_"
+                + safe_filename
+            )
+        )
+
+        # ----------------------------------------------------
+        # WRITE FILE
+        # ----------------------------------------------------
+
+        with open(
+            temp_path,
+            "wb",
+        ) as f:
+
+            f.write(
+                file_bytes
+            )
+
+        # ----------------------------------------------------
+        # FILE FORENSICS
+        # ----------------------------------------------------
+
+        sha256_hash = compute_sha256(
+            temp_path
+        )
+
+        mime_type = detect_mime_type(
+            temp_path
+        )
 
         file_info = FileInfoResponse(
             filename=file.filename,
@@ -524,81 +676,335 @@ async def analyze_multimedia(
             sha256=sha256_hash,
         )
 
+        # ====================================================
+        # IMAGE
+        # ====================================================
+
         if media_type == "image":
+
             detector = get_image_detector()
+
             if not detector.model_available:
+
                 raise HTTPException(
                     status_code=503,
-                    detail="Production 294-feature Logistic Regression model is not available",
+
+                    detail=(
+                        "Production 294-feature "
+                        "Logistic Regression model "
+                        "is not available"
+                    ),
                 )
-            
-            result = detector.analyze(temp_path)
+
+            # ------------------------------------------------
+            # REAL ANALYSIS
+            # ------------------------------------------------
+
+            result = detector.analyze(
+                temp_path
+            )
+
+            # ------------------------------------------------
+            # DETECTORS
+            # ------------------------------------------------
 
             detectors = [
                 DetectorInfo(
-                    name=result.model_version or "LogisticRegression",
-                    score=result.classical_score,
-                    weight=settings.classical_weight,
+                    name=(
+                        result.model_version
+                        or "LogisticRegression"
+                    ),
+
+                    score=(
+                        result.classical_score
+                    ),
+
+                    weight=(
+                        settings.classical_weight
+                    ),
                 )
             ]
+
             if result.supplementary_available:
+
                 detectors.append(
                     DetectorInfo(
                         name="StegExpose",
-                        score=result.supplementary_score,
-                        weight=settings.stegexpose_weight,
+
+                        score=(
+                            result.supplementary_score
+                        ),
+
+                        weight=(
+                            settings.stegexpose_weight
+                        ),
                     )
                 )
 
-            # Map the response
-            return MultimediaAnalysisResponse(
-                file=file_info,
-                media_type="image",
-                status="STEGO_DETECTED" if result.label == "stego" else "CLEAN" if result.label == "cover" else "INCONCLUSIVE",
-                steganography_detected=(result.label == "stego"),
-                confidence=result.confidence,
-                label=result.label,
-                detectors=detectors,
-                techniques=[
-                    TechniqueResponse(
-                        technique=t.technique,
-                        confidence=t.confidence,
-                        evidence=t.evidence
-                    ) for t in result.techniques
-                ], 
-                payload=PayloadResponse(), 
-                forensic_findings=[
-                    ForensicFindingResponse(
-                        category=f.category,
-                        description=f.description,
-                        severity=f.severity,
-                        evidence=f.evidence
-                    ) for f in result.forensic_findings
-                ], 
-                feature_count=result.feature_count,
-                model_version=result.model_version,
-                warnings=result.warnings,
-                analysis_timestamp=datetime.utcnow().isoformat() + "Z"
-            )
-        
-        else:
-            # Phase 1 only supports images; returning 501 for others until Phase 4/5
-            raise HTTPException(
-                status_code=501,
-                detail=f"Analysis for {media_type} is not yet implemented (coming in subsequent phases).",
+            # ------------------------------------------------
+            # DETECTION STATUS
+            # ------------------------------------------------
+
+            if result.detection_status:
+
+                detection_status = (
+                    result.detection_status
+                )
+
+            elif result.label == "stego":
+
+                detection_status = (
+                    "STEGO_DETECTED"
+                )
+
+            elif result.label == "cover":
+
+                detection_status = "CLEAN"
+
+            else:
+
+                detection_status = (
+                    "INCONCLUSIVE"
+                )
+
+            # ------------------------------------------------
+            # PAYLOAD
+            # ------------------------------------------------
+
+            extraction = (
+                result.extraction
             )
 
+            if extraction is not None:
+
+                payload = PayloadResponse(
+                    status=(
+                        extraction.status
+                    ),
+
+                    payload_type=(
+                        extraction.payload_type
+                    ),
+
+                    payload_size=(
+                        extraction.payload_size
+                    ),
+
+                    sha256=(
+                        extraction.sha256
+                    ),
+
+                    download_id=(
+                        extraction.download_id
+                    ),
+
+                    message=(
+                        extraction.message
+                    ),
+                )
+
+            else:
+
+                payload = PayloadResponse(
+                    status="NOT_ATTEMPTED",
+                    payload_type=None,
+                    payload_size=None,
+                    sha256=None,
+                    download_id=None,
+                    message=(
+                        "Payload extraction was "
+                        "not attempted."
+                    ),
+                )
+
+            # ------------------------------------------------
+            # FORENSIC FINDINGS
+            # ------------------------------------------------
+
+            forensic_findings = [
+                ForensicFindingResponse(
+                    category=f.category,
+                    description=f.description,
+                    severity=f.severity,
+                    evidence=f.evidence,
+                )
+                for f in result.forensic_findings
+            ]
+
+            # ------------------------------------------------
+            # TECHNIQUES
+            # ------------------------------------------------
+
+            techniques = [
+                TechniqueResponse(
+                    technique=t.technique,
+                    confidence=t.confidence,
+                    evidence=t.evidence,
+                )
+                for t in result.techniques
+            ]
+
+            # ------------------------------------------------
+            # STEGANOGRAPHY DETECTED
+            # ------------------------------------------------
+
+            steganography_detected = (
+                result.label == "stego"
+            )
+
+            if (
+                extraction is not None
+                and extraction.status
+                == "RECOVERED"
+            ):
+
+                steganography_detected = True
+
+                detection_status = (
+                    "STEGO_DETECTED"
+                )
+
+            # ------------------------------------------------
+            # FINAL RESPONSE
+            # ------------------------------------------------
+
+            return MultimediaAnalysisResponse(
+
+                file=file_info,
+
+                media_type="image",
+
+                status=detection_status,
+
+                steganography_detected=(
+                    steganography_detected
+                ),
+
+                confidence=(
+                    result.confidence
+                ),
+
+                label=result.label,
+
+                detectors=detectors,
+
+                techniques=techniques,
+
+                payload=payload,
+
+                forensic_findings=(
+                    forensic_findings
+                ),
+
+                feature_count=(
+                    result.feature_count
+                ),
+
+                model_version=(
+                    result.model_version
+                ),
+
+                warnings=result.warnings,
+
+                analysis_timestamp=(
+                    datetime.utcnow()
+                    .isoformat()
+                    + "Z"
+                ),
+            )
+
+        # ====================================================
+        # AUDIO
+        # ====================================================
+
+        if media_type == "audio":
+
+            raise HTTPException(
+                status_code=501,
+
+                detail=(
+                    "Audio steganography analysis "
+                    "is not implemented yet. "
+                    "No fabricated result is returned."
+                ),
+            )
+
+        # ====================================================
+        # VIDEO
+        # ====================================================
+
+        if media_type == "video":
+
+            raise HTTPException(
+                status_code=501,
+
+                detail=(
+                    "Video steganography analysis "
+                    "is not implemented yet. "
+                    "No fabricated result is returned."
+                ),
+            )
+
+        # ====================================================
+        # UNSUPPORTED
+        # ====================================================
+
+        raise HTTPException(
+            status_code=415,
+
+            detail=(
+                f"Unsupported media type: "
+                f"{media_type}"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # HTTP ERROR
+    # --------------------------------------------------------
+
     except HTTPException:
+
         raise
+
+    # --------------------------------------------------------
+    # UNEXPECTED ERROR
+    # --------------------------------------------------------
+
     except Exception as exc:
-        logger.exception("Analysis failed: %s", exc)
+
+        logger.exception(
+            "Analysis failed: %s",
+            exc,
+        )
+
         raise HTTPException(
             status_code=500,
-            detail=f"Analysis failed: {exc}",
+
+            detail=(
+                f"Analysis failed: {exc}"
+            ),
         )
+
+    # --------------------------------------------------------
+    # CLEANUP
+    # --------------------------------------------------------
+
     finally:
-        if temp_path is not None and temp_path.exists():
+
+        if (
+            temp_path is not None
+            and temp_path.exists()
+        ):
+
             try:
+
                 temp_path.unlink()
+
             except Exception as cleanup_exc:
-                logger.warning("Could not delete temporary file %s: %s", temp_path, cleanup_exc)
+
+                logger.warning(
+                    "Could not delete temporary "
+                    "file %s: %s",
+                    temp_path,
+                    cleanup_exc,
+                )
